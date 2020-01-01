@@ -1,0 +1,410 @@
+How to use tmux
+Install tmux
+ctrl + b + "
+ctrl + B + %
+ctrl + B + o 
+ctrl + B + : setw synchronize-panes
+
+
+Create cluster 
+============================================================================================================
+1- Add the ssh key into all nodes, And add all hosts in /etc/hosts 
+cat /root/.ssh/id_rsa.pub | ssh root@192.168.10.10 'cat >> .ssh/authorized_keys '
+add all hosts into /etc/hosts over all nodes 
+
+2- Install pcs and fence-agents-all overs all nodes 
+yum install fence-agents-all -y
+
+3- Add service for firewall 
+firewall-cmd --add-service=high-availability --permanent  
+firewall-cmd --list-all
+
+4- systemctl status pcsd 
+   systemctl start pcsd 
+   systemctl enable pcsd 
+
+5- You should find user called hacluster 
+cat /etc/passwd | grep -i hacluster
+6- Set password for user hacluster 
+echo redhatPassW | passwd --stdin hacluster
+
+7- Auth all nodes 
+pcs cluster auth node1.kimo.com node2.kimo.com node3.kimo.com -u hacluster -p redhatPassW
+8- Installing the cluster 
+pcs cluster setup --start --name cluster0 node1.kimo.com node2.kimo.com node3.kimo.com --force 
+
+9- Enable cluster over all nodes 
+pcs cluster enable --all
+pcs cluster status 
+pcs status 
+================================================================================================================
+Install Fencing Server 
+You should install fencing outside the cluster .
+
+1- Create key and add the key into all the nodes
+2- Install fencing packages .
+yum install fence-virt fence-virtd fence-virtd-multicast fence-virtd-libvirt
+
+3- mkdir /etc/cluster & cd /etc/cluster 
+4- add if=/dev/random of=/etc/cluster/fence_xvm.key bs=512 count=1
+5- fence_virtd -c
+
+6- systemctl restart fence_virtd && systemctl enable fence_virtd 
+
+7- firewall-cmd --add-port=1229/udp --permanent 
+8- Create /etc/cluster over all the nodes, Then copy fence_xvm.key over there .
+9- open the 1229 port into all nodes .
+firewall-cmd --add-port=1229/udp --permanent
+10- add the plugin if you use kvm install that plugin if vmware you have to use the other . 
+All Nodes
+pcs stonith list # will show you all the agent that can be used 
+pcs stonith describe fence_xvm 
+pcs stonith create node1 fence_xvm port="node1.kimo.com" pcmk_host_list="node1.kimo.com"
+pcs stonith show 
+11 - fence_xvm -o list
+
+12- fence_xvm -H node1.kimo.com -o off 
+    fence_xvm -H node1.kimo.com -o on 
+
+13- if you are on node1 and want restart node2 you can run
+    pcs stonith fence node2.kimo.com 
+
+================================================================================================================
+How to Managing Cluster Nodes 
+
+1- If you want to stop cluster over all nodes 
+pcs cluster stop --all
+pcs cluster start --all
+2- if you want stop cluster on node1,You can login node1
+pcs cluster stop
+
+3- if you are on host node1 and want to stop node02
+pcs cluster stop node02.kimo.com
+
+4- if you want to disable or enable  
+pcs cluster disable  --all
+pcs cluster enable --all
+pcs cluster disable node1.kimo.com
+pcs cluster enable node2.kimo.com
+
+5- reboot node 
+pcs stonith fence node3.kimo.com
+================================================================================================================
+Adding and Removing CLuster Node 
+
+You have node4.kimo.com
+
+1- Install all the above packages in the new node
+2- Also Allow ports into the firewalld 
+3- from node1 you can run that command in order to add the new node to the cluster .
+pcs cluster auth -u hacluster -p redhatPass node4.kimo.com 
+pcs cluster node add node4.kimo.com
+login to node4 and run .
+pcs cluster auth -u hacluster -p redhat 
+pcs cluster enable 
+pcs cluster start 
+================================================================================================================
+How to Adding and Removing node into the cluster .
+
+1- from any node like node1 you can run the below command 
+pcs cluster node remove node4.kimo.com
+pcs stonith delete fence_node4
+
+================================================================================================================
+How to standby and unstandby Nodes
+# standby mode that if you have an issue in host so you want fix the issue, Then you can add into standby mode
+pcs cluster standby node2.kimo.com
+pcs status
+pcs cluster unstandby node2.kimo.com
+pcs status cluster 
+
+pcs status resources 
+pcs status nodes 
+pcs status corosync
+pcs status pcsd 
+================================================================================================================
+Quorum Operations 
+
+corosync-quorumtool
+
+corosync-quorumtool -m # will be live
+
+Wait_for_all flag means that will stop the cluster if even on nodes goes downs .
+To enable wait_for_all
+vim /etc/corosync/corosync.conf
+
+quorum {
+  wait_for_all: 1
+{
+
+pcs cluster stop --all
+pcs cluster sync
+pcs cluster start --all
+
+auto_tie_breaker flag if you have 4 nodes and 2 nodes goes down the cluster will keep working with 2 nodes .
+
+================================================================================================================
+Creating and Configuring Resources
+PaceMaker who will be managing the resources 
+
+pcs resource list
+pcs resource describe Filesystem 
+
+create file system resources
+you have to allow the port into your firewall  
+pcs resource create new_sis Filesystem device=nfsserver.kimo.com:/export/www directory=/var/www/html fstype=nfs options=ro
+pcs resource show  
+if you want to know where is the resources are created you can run 
+pcs status 
+
+how to remove resource 
+pcs resource delete newfs 
+how to update resource 
+pcs resource update newfs  
+
+================================================================================================================
+Resources Group
+- flooting IP Address 
+- Shared FileSystem
+- Apache Service 
+
+Note: You have to open all the service ports from Iptables 
+
+1- yum install httpd && service httpd restart && systemctl enable httpd 
+
+2- creating ip resource and add to group
+pcs resource create webip IPaddr2 ip=192.168.10.201 nic=eth0:1 cidr_netmask=24 --group web_server
+pcs resource show  
+
+3- create resource for the filesystem and add to group
+pcs resource create new_sis Filesystem device=nfsserver.kimo.com:/export/www directory=/var/www/html fstype=nfs options=ro --group web_server
+
+4- create apache resoure and add to group web_server
+pcs resource create httpd_server apache --group web_server 
+
+================================================================================================================
+Managing Resources 
+#if you want disable or enable resource.
+pcs resource disable web_server 
+pcs resource enable web_server 
+# if you want move resource from node to another node 
+pcs resource move web_server node2.kimo.com
+pcs resource show 
+
+# If you want deny resource to move to specific node 
+pcs resource ban web_server node3.kimo.com
+pcs constraint list # you will see that the resourse are disabled in the specific node .
+# to remove the ban 
+pcs resource clear web_server node3.kimo.com
+
+================================================================================================================
+Troubleshooting High-Availability Cluster 
+# corosync corosync.conf path 
+/etc/corocync/corosync.conf
+# Corosync log file path
+/var/log/cluster/corosync.log
+
+# pacemaker config file path
+/etc/sysconfig/pacemaker 
+# the default log file for pacemaker corosync.log but you can change it into the config pacemaker config file .
+/var/log/cluster/corosync.log
+
+# after changing any configuration you have to run the below command 
+pcs cluster sync 
+pcs cluster stop --all 
+pcs cluster start --all 
+# if you changed anything in the config file you have to copy the config accross all the nodes .
+scp /etc/sysconfig/pacemaker  node2.kimo.com:/etc/sysconfig/pacemaker
+scp /etc/sysconfig/pacemaker  node3.kimo.com:/etc/sysconfig/pacemaker
+pcs cluster stop --all 
+pcs cluster start --all 
+
+================================================================================================================
+Troubleshooting Resource Failures 
+
+pcs resource failcount show web_server 
+pcs resource debug-start web_server --full | less 
+# if want to update the file path for apache .
+pcs resource update web_server configfile=/etc/httpd/conf/httpd.conf
+pcs resource failcout show web_server 
+
+================================================================================================================
+Configuring An Active/PASSIVE NFS RESOURCE GROUP
+
+- Create ISCSI Disk and attached to all nodes,You can check that by running fdsik -l and check if it showing in all nodes.
+- Create partition from the ISCSI DISK into one node 
+- If you will login to another node you will see the partition that you have creted .
+- If not showing you can run partprobe
+- formate the partition
+mkfs -t xfs -f /dev/sda1
+- create filesystem resource 
+pcs resource create nfs_disk Filesystem device=/dev/sda1 directory=/var/www/html fstype=xfs --group nfs
+pcs status 
+- now it will be automatically mounted over all the nodes 
+- Install nfs over all the nodes 
+  yum install nfs-utils 
+  systemctl stop nfs-lock # resource will manage the starting and stoping the service 
+  systemctl disable nfs-lock
+
+- create the nfs service 
+pcs resource create nfs_service nfsserver nfs_shared_infodir=/var/www/html --group nfs 
+pcs status 
+- you can see that the nfs service is up now .
+systemctl status nfs 
+
+- create export resource 
+pcs resource crete nfsexp exportfs clientspec="*" options=rw,sync,no_root_squash directory=/nfsshare fsid=1 --group nfs
+ 
+- Create floating ip # that Ip will move from node to another .
+pcs resource create nfsip IPaddr2 ip=192.168.20.100 cidr_netmask=24 --group nfs  
+
+pcs resource show nfs 
+
+================================================================================================================
+Managing Constraints 
+
+pcs constraint order A then B
+pcs constraint
+pcs constraint list --full
+pcs constraint remove 
+#if you want web_server work into node2
+pcs constraint location web_server prefers node2.kimo.com
+pcs constraint list --full 
+pcs constraint remove location-id 
+pcs constraint location web_server avoids node1.kimo.com
+# Colocation 
+
+pcs constraint colocation add B with A
+
+================================================================================================================
+Two Node Cluster Issues
+1- you have to set this value (two_node:1) into /etc/corosync/corosync.conf
+That value help you if you want corosync function with the two nodes .
+================================================================================================================
+Configuring ISCSI Target  & Initiator 
+
+1- Install targetcli 
+   yum install targetcli
+2- run targetcli and run help 
+
+3- install over the client server iscsi-init 
+   yum install iscsi-init*
+
+
+================================================================================================================
+Managing High availability logical volumes 
+
+Clustered LVM and HA LVM-LVM
+
+Cluster LVM > shared storage are available to all cluster nodes all of the time .
+HA-LVM > can only accessed by one node at a time .
+
+CLuster LVM good if you will working with shared file system like GFS2 
+HA-LVM good if you will using ext4 or XFS to restrict access just one node at a time .
+
+If you want configure the LVM Active/Passive 
+edit /etc/lvm/lvm.conf
+locking_type = 1
+volume_list = ["rhel"] # that will ignore that logical volume to be part of the cluster .
+
+# Create resource for LVM
+pcs resource create halvm LVM volgrpname=clustervg exclusive=true --group halvm
+pcs resource create xfsfs Filesystem device="/dev/clustervg/clusterlv" directory="/var/www/html" fstype="xfs" --group halvm
+================================================================================================================
+Cluster LVM 
+
+This changes should be done accross all the nodes .
+- you have to run these daeman over all nodes DLM and CLVMD 
+- yum install dlm lvm2-cluster 
+- chnage the locking into /etc/lvm/lvm.conf
+locking_type = 3 # mean 3 nodes 
+use_lvmetad = 0
+- lvmconf --enable-cluster 
+- systemctl stop lvm2-lvmetad 
+- systemctl disable lvm2-lvmetad 
+- Into one node create the resources 
+pcs resource create dlm controld op monitor interval=30s on-fail=fence clone interleave=true ordered=true
+pcs resource create clvmd clvm op monitor interval=30s on-fail=fence clone interleave=true ordered=true
+pcs constraint order start dlm-clone then clvmd-clone # you make rule that will start dlm-clone first then clvmd-clone
+pcs constraint colocation add clvm-clone with dlm-clone # to run both of the resources into same nodes .
+pcs status .
+================================================================================================================
+GFS2 FileSystem
+
+- yum -y install gfs2-utils lvm2-cluster # should be installed across all the nodes 
+
+- set policy 
+pcs property no-quorum-policy=freeze 
+pcs resource create dlm ocf:pacemaker:contold op monitor interval=30s on-fail=fence clone interleave=true ordered=true
+lvmconf --enable-cluster # that command should be run over all the nodes .
+systemctl stop lvm2-lvmeted  # that command should be run over all the nodes .
+pcs resource create clvmd ocf:heartbeat:clvm op monitor interval=30s on-fail=fence clone interleave=true ordered=true 
+pcs constraint order start dlm-clone then clvmd-clone 
+pcs constraint colocation add clvmd-clone with dlm-clone 
+pcs constraint list 
+# create the filesystem only done on one node 
+pvcreate /dev/sda1
+vgcreate -Ay -cy sis_cluster /dev/sda1
+lvcreate -L 1G -n sis_data sis_cluster 
+mkfs.gfs2 -t sis_cluster:gfsdata -j3 /dev/clustvg/sis_data
+mount -t gfs2 /dev/clustervg/sis_data /data # you have to mount it on all the nodes .
+lvextend -L +200M /dev/mapper/clustervg-gfsdata # how to extend lvm 
+gfs2_grow -T /data 
+gfs2_grow  /data # then check the size.
+if you want mounted in boot time accross all the node .
+pcs resource create cluster_sis Filesystem device="/dev/clsuster/sis_data" directory="/data" fstype="gfs2" op monitor interval=10s on-fail=fence clone interleave=true
+pcs status 
+pcs constraint order start clmvd-clone then clusterfs-clone
+pcs cinstraint colocation add clmvd-clone  with clusterfs-clone
+pcs status 
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+ 
+
+
+ 
+
+
+
+
+   
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
